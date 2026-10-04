@@ -1,6 +1,7 @@
 import './style.css'
 
 type Note = { name: string; frequency: number; black?: boolean }
+type NoteStats = { correct: number; attempts: number }
 
 const notes: Note[] = [
   { name: 'C', frequency: 261.63 }, { name: 'C♯', frequency: 277.18, black: true },
@@ -23,6 +24,7 @@ let noteCount = Number(localStorage.getItem('eartrain-note-count') ?? '1')
 let themeMode = localStorage.getItem('eartrain-theme') ?? 'system'
 let keyLevel = Number(localStorage.getItem('eartrain-key-level') ?? '1')
 let keyboardStart = Number(localStorage.getItem('eartrain-key-start') ?? '0')
+const accuracy: Record<string, NoteStats> = JSON.parse(localStorage.getItem('eartrain-accuracy') ?? '{}')
 let playbackToken = 0
 let playbackTimers: number[] = []
 const activeOscillators = new Set<OscillatorNode>()
@@ -206,8 +208,13 @@ function chooseNote() {
   }).filter((note): note is Note => note !== undefined)
   const available = selectedMode === 'Natural notes' ? whiteNotes : [...whiteNotes, ...visibleBlackNotes]
   if (noteCount > 1) {
-    const shuffled = [...available].sort(() => Math.random() - 0.5)
-    currentNotes = shuffled.slice(0, Math.min(noteCount, shuffled.length))
+    const pool = [...available]
+    currentNotes = []
+    while (currentNotes.length < Math.min(noteCount, pool.length)) {
+      const picked = weightedPick(pool)
+      currentNotes.push(picked)
+      pool.splice(pool.indexOf(picked), 1)
+    }
     currentNote = currentNotes[0]
     selectedAnswers = []
     renderNoteOrbs()
@@ -215,10 +222,33 @@ function chooseNote() {
   }
   const choices = available.filter((note) => note !== lastNote)
   lastNote = currentNote
-  currentNote = choices[Math.floor(Math.random() * choices.length)]
+  currentNote = weightedPick(choices)
   currentNotes = [currentNote]
   selectedAnswers = []
   renderNoteOrbs()
+}
+
+function weightedPick(pool: Note[]) {
+  const weights = pool.map((note) => {
+    const stats = accuracy[note.name]
+    const score = stats && stats.attempts > 0 ? stats.correct / stats.attempts : 0.5
+    return 1 + (1 - score) * 5
+  })
+  const total = weights.reduce((sum, weight) => sum + weight, 0)
+  let target = Math.random() * total
+  for (let index = 0; index < pool.length; index++) {
+    target -= weights[index]
+    if (target <= 0) return pool[index]
+  }
+  return pool[pool.length - 1]
+}
+
+function recordAccuracy(noteName: string, correct: boolean) {
+  const stats = accuracy[noteName] ?? { correct: 0, attempts: 0 }
+  stats.attempts += 1
+  if (correct) stats.correct += 1
+  accuracy[noteName] = stats
+  localStorage.setItem('eartrain-accuracy', JSON.stringify(accuracy))
 }
 
 function playRound() {
@@ -235,6 +265,7 @@ function answer(note: Note) {
     const nextIndex = selectedAnswers.filter(Boolean).length
     if (currentNotes[nextIndex]?.name === note.name) {
       selectedAnswers[nextIndex] = note
+      recordAccuracy(note.name, true)
       renderNoteOrbs()
       const answeredCount = selectedAnswers.filter(Boolean).length
       if (answeredCount < noteCount) {
@@ -246,18 +277,23 @@ function answer(note: Note) {
       feedback.className = 'feedback correct'
       if (!playMode) window.setTimeout(playRound, 1200)
     } else {
+      if (currentNotes[nextIndex]) recordAccuracy(currentNotes[nextIndex].name, false)
+      recordAccuracy(note.name, false)
       showWrongAnswer()
     }
     return
   }
   const feedback = document.querySelector('#feedback')!
   if (note.name === currentNote.name) {
+    recordAccuracy(note.name, true)
     selectedAnswers = [note]
     renderNoteOrbs()
     feedback.textContent = 'That’s it. Nice listening.'
     feedback.className = 'feedback correct'
     if (!playMode) window.setTimeout(playRound, 1200)
   } else {
+    recordAccuracy(currentNote.name, false)
+    recordAccuracy(note.name, false)
     showWrongAnswer()
   }
 }
