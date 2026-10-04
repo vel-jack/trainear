@@ -23,6 +23,9 @@ let noteCount = Number(localStorage.getItem('eartrain-note-count') ?? '1')
 let themeMode = localStorage.getItem('eartrain-theme') ?? 'system'
 let keyLevel = Number(localStorage.getItem('eartrain-key-level') ?? '1')
 let keyboardStart = Number(localStorage.getItem('eartrain-key-start') ?? '0')
+let playbackToken = 0
+let playbackTimers: number[] = []
+const activeOscillators = new Set<OscillatorNode>()
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 
@@ -143,6 +146,7 @@ function renderNoteOrbs() {
   orbs.querySelectorAll<HTMLDivElement>('.sound-orb').forEach((orb, index) => {
     orb.addEventListener('click', (event) => {
       event.stopPropagation()
+      stopPlayback()
       playFrequency(currentNotes[index], index)
     })
   })
@@ -159,11 +163,34 @@ function playFrequency(note: Note, orbIndex = 0) {
   gain.gain.exponentialRampToValueAtTime(0.38, audioContext.currentTime + 0.025)
   gain.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 1.15)
   oscillator.connect(gain).connect(audioContext.destination)
+  activeOscillators.add(oscillator)
+  oscillator.addEventListener('ended', () => activeOscillators.delete(oscillator), { once: true })
   oscillator.start()
   oscillator.stop(audioContext.currentTime + 1.2)
   const orb = document.querySelectorAll('.sound-orb')[orbIndex]
   orb?.classList.add('playing')
   window.setTimeout(() => orb?.classList.remove('playing'), 500)
+}
+
+function stopPlayback() {
+  playbackToken++
+  playbackTimers.forEach((timer) => window.clearTimeout(timer))
+  playbackTimers = []
+  activeOscillators.forEach((oscillator) => {
+    try { oscillator.stop() } catch { /* already stopped */ }
+  })
+  activeOscillators.clear()
+}
+
+function playSequence(sequence: Note[]) {
+  stopPlayback()
+  const token = playbackToken
+  sequence.forEach((note, index) => {
+    const timer = window.setTimeout(() => {
+      if (token === playbackToken) playFrequency(note, index)
+    }, index * 650)
+    playbackTimers.push(timer)
+  })
 }
 
 function chooseNote() {
@@ -196,7 +223,7 @@ function chooseNote() {
 
 function playRound() {
   chooseNote()
-  currentNotes.forEach((note, index) => window.setTimeout(() => playFrequency(note, index), index * 650))
+  playSequence(currentNotes)
   document.querySelector('#feedback')!.textContent = ''
 }
 
@@ -245,7 +272,7 @@ function showWrongAnswer() {
 }
 
 document.querySelector('.listen-area')!.addEventListener('click', () => {
-  if (!playMode) currentNotes.forEach((note, index) => window.setTimeout(() => playFrequency(note, index), index * 650))
+  if (!playMode) playSequence(currentNotes)
 })
 document.querySelector('#play-mode')!.addEventListener('change', (event) => {
   playMode = (event.target as HTMLInputElement).checked
